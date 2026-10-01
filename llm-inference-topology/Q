@@ -1,0 +1,9 @@
+L4 ─ Application / Interface
+ ↓
+L3 ─ Context / Orchestration
+ ↓
+L2 ─ Policy / Control
+ ↓
+L1 ─ Model Inference
+ ↓
+L0 ─ Compute Substrate
