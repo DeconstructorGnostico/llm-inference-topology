@@ -1,0 +1,1547 @@
+#!/usr/bin/env bash
+set -e
+
+# ============================================================
+# LLM INFERENCE TOPOLOGY
+# Transformación del repositorio conceptual en prototipo
+# experimental ejecutable.
+# ============================================================
+
+cd llm-inference-topology
+
+# ------------------------------------------------------------
+# 1. ESTRUCTURA
+# ------------------------------------------------------------
+
+mkdir -p topology models experiments tests docs
+
+# ------------------------------------------------------------
+# 2. CONFIGURACIÓN DEL PROYECTO
+# ------------------------------------------------------------
+
+cat > pyproject.toml <<'EOF'
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-inference-topology"
+version = "0.1.0"
+description = "Framework experimental para representar y auditar topologías de inferencia LLM."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+authors = [
+    {name = "DeconstructorGnostico"}
+]
+
+[project.scripts]
+llm-topology = "topology.parser:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+EOF
+
+cat > .gitignore <<'EOF'
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+dist/
+build/
+*.egg-info/
+results/
+EOF
+
+# ------------------------------------------------------------
+# 3. SCHEMA
+# ------------------------------------------------------------
+
+cat > topology/__init__.py <<'EOF'
+from .schema import (
+    InputState,
+    IntentState,
+    ContextState,
+    InferenceState,
+    ValidationState,
+    OutputState,
+    TopologyState,
+)
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "InputState",
+    "IntentState",
+    "ContextState",
+    "InferenceState",
+    "ValidationState",
+    "OutputState",
+    "TopologyState",
+]
+EOF
+
+cat > topology/schema.py <<'EOF'
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class InputState:
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class IntentState:
+    objective: str | None = None
+    constraints: list[str] = field(default_factory=list)
+    variables: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ContextState:
+    messages: list[dict[str, str]] = field(default_factory=list)
+    token_estimate: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class InferenceState:
+    model: str | None = None
+    provider: str | None = None
+    prompt: str | None = None
+    response: str | None = None
+    latency_ms: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+@dataclass
+class ValidationState:
+    valid: bool = False
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class OutputState:
+    text: str | None = None
+    format: str = "text"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TopologyState:
+    input: InputState
+    intent: IntentState = field(default_factory=IntentState)
+    context: ContextState = field(default_factory=ContextState)
+    inference: InferenceState = field(default_factory=InferenceState)
+    validation: ValidationState = field(default_factory=ValidationState)
+    output: OutputState = field(default_factory=OutputState)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "input": self.input.__dict__,
+            "intent": self.intent.__dict__,
+            "context": self.context.__dict__,
+            "inference": self.inference.__dict__,
+            "validation": self.validation.__dict__,
+            "output": self.output.__dict__,
+        }
+EOF
+
+# ------------------------------------------------------------
+# 4. GRAFO DE TOPOLOGÍA
+# ------------------------------------------------------------
+
+cat > topology/graph.py <<'EOF'
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Node:
+    id: str
+    layer: int
+    name: str
+    type: str
+
+
+@dataclass
+class Edge:
+    source: str
+    target: str
+    relation: str
+
+
+@dataclass
+class InferenceTopology:
+    nodes: list[Node] = field(default_factory=list)
+    edges: list[Edge] = field(default_factory=list)
+
+    def add_node(self, node: Node) -> None:
+        if any(n.id == node.id for n in self.nodes):
+            raise ValueError(f"Node already exists: {node.id}")
+
+        self.nodes.append(node)
+
+    def add_edge(self, edge: Edge) -> None:
+        ids = {n.id for n in self.nodes}
+
+        if edge.source not in ids:
+            raise ValueError(
+                f"Unknown source node: {edge.source}"
+            )
+
+        if edge.target not in ids:
+            raise ValueError(
+                f"Unknown target node: {edge.target}"
+            )
+
+        self.edges.append(edge)
+
+    def validate(self) -> list[str]:
+        errors = []
+
+        ids = {n.id for n in self.nodes}
+
+        for edge in self.edges:
+            if edge.source not in ids:
+                errors.append(
+                    f"Unknown source: {edge.source}"
+                )
+
+            if edge.target not in ids:
+                errors.append(
+                    f"Unknown target: {edge.target}"
+                )
+
+        layers = {n.layer for n in self.nodes}
+
+        if not layers:
+            errors.append(
+                "Topology contains no nodes."
+            )
+
+        if min(layers, default=0) < 0:
+            errors.append(
+                "Layer cannot be negative."
+            )
+
+        return errors
+
+    def as_dict(self) -> dict:
+        return {
+            "nodes": [
+                n.__dict__
+                for n in self.nodes
+            ],
+            "edges": [
+                e.__dict__
+                for e in self.edges
+            ],
+        }
+
+
+def default_topology() -> InferenceTopology:
+
+    topology = InferenceTopology()
+
+    nodes = [
+        Node(
+            "L0",
+            0,
+            "Compute substrate",
+            "hardware"
+        ),
+        Node(
+            "L1",
+            1,
+            "Model inference",
+            "model"
+        ),
+        Node(
+            "L2",
+            2,
+            "Policy and control",
+            "control"
+        ),
+        Node(
+            "L3",
+            3,
+            "Context orchestration",
+            "orchestration"
+        ),
+        Node(
+            "L4",
+            4,
+            "Application interface",
+            "interface"
+        ),
+    ]
+
+    for node in nodes:
+        topology.add_node(node)
+
+    topology.add_edge(
+        Edge(
+            "L4",
+            "L3",
+            "request"
+        )
+    )
+
+    topology.add_edge(
+        Edge(
+            "L3",
+            "L2",
+            "context_to_control"
+        )
+    )
+
+    topology.add_edge(
+        Edge(
+            "L2",
+            "L1",
+            "controlled_inference"
+        )
+    )
+
+    topology.add_edge(
+        Edge(
+            "L1",
+            "L0",
+            "computation"
+        )
+    )
+
+    topology.add_edge(
+        Edge(
+            "L0",
+            "L1",
+            "execution_result"
+        )
+    )
+
+    topology.add_edge(
+        Edge(
+            "L1",
+            "L2",
+            "model_output"
+        )
+    )
+
+    topology.add_edge(
+        Edge(
+            "L2",
+            "L3",
+            "validated_output"
+        )
+    )
+
+    topology.add_edge(
+        Edge(
+            "L3",
+            "L4",
+            "render"
+        )
+    )
+
+    return topology
+EOF
+
+# ------------------------------------------------------------
+# 5. MOTOR DE INFERENCIA
+# ------------------------------------------------------------
+
+cat > topology/inference.py <<'EOF'
+import json
+import time
+import urllib.request
+import urllib.error
+
+from .schema import InferenceState
+
+
+class InferenceBackend:
+
+    def generate(
+        self,
+        prompt: str
+    ) -> InferenceState:
+        raise NotImplementedError
+
+
+class MockBackend(InferenceBackend):
+
+    def __init__(
+        self,
+        model: str = "mock"
+    ):
+        self.model = model
+
+    def generate(
+        self,
+        prompt: str
+    ) -> InferenceState:
+
+        start = time.perf_counter()
+
+        response = (
+            "[MOCK INFERENCE] "
+            f"Input received: {prompt}"
+        )
+
+        latency = (
+            time.perf_counter() - start
+        ) * 1000
+
+        return InferenceState(
+            model=self.model,
+            provider="local-mock",
+            prompt=prompt,
+            response=response,
+            latency_ms=latency,
+            input_tokens=len(prompt.split()),
+            output_tokens=len(response.split()),
+        )
+
+
+class OllamaBackend(InferenceBackend):
+
+    def __init__(
+        self,
+        model: str = "llama3.2",
+        host: str = "http://127.0.0.1:11434",
+    ):
+        self.model = model
+        self.host = host.rstrip("/")
+
+    def generate(
+        self,
+        prompt: str
+    ) -> InferenceState:
+
+        payload = json.dumps({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+        }).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.host}/api/generate",
+            data=payload,
+            headers={
+                "Content-Type": "application/json"
+            },
+            method="POST",
+        )
+
+        start = time.perf_counter()
+
+        try:
+
+            with urllib.request.urlopen(
+                request,
+                timeout=120
+            ) as response:
+
+                data = json.loads(
+                    response
+                    .read()
+                    .decode("utf-8")
+                )
+
+        except urllib.error.URLError as exc:
+
+            raise RuntimeError(
+                f"Ollama unavailable at "
+                f"{self.host}: {exc}"
+            ) from exc
+
+        latency = (
+            time.perf_counter() - start
+        ) * 1000
+
+        text = data.get(
+            "response",
+            ""
+        )
+
+        return InferenceState(
+            model=self.model,
+            provider="ollama",
+            prompt=prompt,
+            response=text,
+            latency_ms=latency,
+            input_tokens=data.get(
+                "prompt_eval_count"
+            ),
+            output_tokens=data.get(
+                "eval_count"
+            ),
+        )
+
+
+def run_inference(
+    text: str,
+    backend: InferenceBackend
+) -> InferenceState:
+
+    return backend.generate(text)
+EOF
+
+# ------------------------------------------------------------
+# 6. VALIDACIÓN
+# ------------------------------------------------------------
+
+cat > topology/validation.py <<'EOF'
+from .schema import TopologyState
+
+
+def validate_state(
+    state: TopologyState
+) -> TopologyState:
+
+    errors = []
+    warnings = []
+
+    if not state.input.text.strip():
+
+        errors.append(
+            "Input text is empty."
+        )
+
+    if state.inference.response is None:
+
+        errors.append(
+            "Inference response is missing."
+        )
+
+    if state.inference.model is None:
+
+        warnings.append(
+            "No model identifier was recorded."
+        )
+
+    state.validation.errors = errors
+    state.validation.warnings = warnings
+
+    state.validation.valid = (
+        len(errors) == 0
+    )
+
+    if state.inference.response is not None:
+
+        state.output.text = (
+            state.inference.response
+        )
+
+    return state
+EOF
+
+# ------------------------------------------------------------
+# 7. MÉTRICAS
+# ------------------------------------------------------------
+
+cat > topology/metrics.py <<'EOF'
+from statistics import mean
+from typing import Iterable
+
+
+def token_throughput(
+    output_tokens: int | None,
+    latency_ms: float | None,
+) -> float | None:
+
+    if (
+        output_tokens is None
+        or latency_ms is None
+    ):
+        return None
+
+    if latency_ms <= 0:
+        return None
+
+    return (
+        output_tokens /
+        (latency_ms / 1000)
+    )
+
+
+def latency_summary(
+    latencies_ms: Iterable[float]
+) -> dict:
+
+    values = list(latencies_ms)
+
+    if not values:
+
+        return {
+            "count": 0,
+            "mean_ms": None,
+            "min_ms": None,
+            "max_ms": None,
+        }
+
+    return {
+        "count": len(values),
+        "mean_ms": mean(values),
+        "min_ms": min(values),
+        "max_ms": max(values),
+    }
+EOF
+
+# ------------------------------------------------------------
+# 8. CLI / RUNNER
+# ------------------------------------------------------------
+
+cat > topology/parser.py <<'EOF'
+import argparse
+import json
+
+from .graph import default_topology
+from .inference import (
+    MockBackend,
+    OllamaBackend,
+)
+from .schema import (
+    InputState,
+    TopologyState,
+)
+from .validation import validate_state
+
+
+def build_parser():
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "LLM Inference Topology "
+            "experimental runner"
+        )
+    )
+
+    parser.add_argument(
+        "text",
+        nargs="?",
+        default=(
+            "Analiza esta arquitectura."
+        ),
+    )
+
+    parser.add_argument(
+        "--backend",
+        choices=[
+            "mock",
+            "ollama"
+        ],
+        default="mock",
+    )
+
+    parser.add_argument(
+        "--model",
+        default="llama3.2",
+    )
+
+    parser.add_argument(
+        "--topology",
+        action="store_true",
+        help="Print topology graph.",
+    )
+
+    return parser
+
+
+def main():
+
+    args = build_parser().parse_args()
+
+    topology = default_topology()
+
+    if args.topology:
+
+        print(
+            json.dumps(
+                topology.as_dict(),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+        return
+
+    errors = topology.validate()
+
+    if errors:
+
+        raise RuntimeError(
+            "Topology validation failed: "
+            + str(errors)
+        )
+
+    if args.backend == "ollama":
+
+        backend = OllamaBackend(
+            model=args.model
+        )
+
+    else:
+
+        backend = MockBackend()
+
+    state = TopologyState(
+        input=InputState(
+            text=args.text
+        )
+    )
+
+    state.inference = (
+        backend.generate(
+            args.text
+        )
+    )
+
+    state = validate_state(
+        state
+    )
+
+    print(
+        json.dumps(
+            state.to_dict(),
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
+EOF
+
+# ------------------------------------------------------------
+# 9. DESCRIPCIÓN DE MODELO
+# ------------------------------------------------------------
+
+cat > models/__init__.py <<'EOF'
+from .base import ModelDescriptor
+
+__all__ = [
+    "ModelDescriptor"
+]
+EOF
+
+cat > models/base.py <<'EOF'
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ModelDescriptor:
+
+    name: str
+    provider: str
+    architecture: str = "unknown"
+    parameters: int | None = None
+    context_length: int | None = None
+    quantization: str | None = None
+    metadata: dict = field(
+        default_factory=dict
+    )
+EOF
+
+# ------------------------------------------------------------
+# 10. EXPERIMENTO BASE
+# ------------------------------------------------------------
+
+cat > experiments/baseline.py <<'EOF'
+import json
+
+from topology.graph import (
+    default_topology
+)
+
+from topology.inference import (
+    MockBackend
+)
+
+from topology.schema import (
+    InputState,
+    TopologyState
+)
+
+from topology.validation import (
+    validate_state
+)
+
+from topology.metrics import (
+    token_throughput
+)
+
+
+def run():
+
+    topology = default_topology()
+
+    topology_errors = (
+        topology.validate()
+    )
+
+    if topology_errors:
+
+        raise RuntimeError(
+            topology_errors
+        )
+
+    backend = MockBackend()
+
+    state = TopologyState(
+        input=InputState(
+            text=(
+                "Describe the "
+                "inference topology."
+            )
+        )
+    )
+
+    state.inference = (
+        backend.generate(
+            state.input.text
+        )
+    )
+
+    state = validate_state(
+        state
+    )
+
+    return {
+        "topology_valid":
+            not topology_errors,
+
+        "state_valid":
+            state.validation.valid,
+
+        "latency_ms":
+            state.inference.latency_ms,
+
+        "throughput_tokens_s":
+            token_throughput(
+                state.inference.output_tokens,
+                state.inference.latency_ms,
+            ),
+    }
+
+
+if __name__ == "__main__":
+
+    print(
+        json.dumps(
+            run(),
+            indent=2
+        )
+    )
+EOF
+
+cat > experiments/topology_test.py <<'EOF'
+from topology.graph import (
+    default_topology
+)
+
+
+def main():
+
+    topology = default_topology()
+
+    errors = topology.validate()
+
+    print(
+        "NODES:",
+        len(topology.nodes)
+    )
+
+    print(
+        "EDGES:",
+        len(topology.edges)
+    )
+
+    if errors:
+
+        print(
+            "STATUS: FAIL"
+        )
+
+        for error in errors:
+            print(
+                "-",
+                error
+            )
+
+        raise SystemExit(1)
+
+    print(
+        "STATUS: PASS"
+    )
+
+
+if __name__ == "__main__":
+    main()
+EOF
+
+# ------------------------------------------------------------
+# 11. TESTS
+# ------------------------------------------------------------
+
+cat > tests/test_topology.py <<'EOF'
+from topology.graph import (
+    Edge,
+    InferenceTopology,
+    Node,
+    default_topology,
+)
+
+from topology.inference import (
+    MockBackend
+)
+
+from topology.schema import (
+    InputState,
+    TopologyState
+)
+
+from topology.validation import (
+    validate_state
+)
+
+
+def test_default_topology_is_valid():
+
+    topology = default_topology()
+
+    assert topology.validate() == []
+
+    assert len(
+        topology.nodes
+    ) == 5
+
+    assert len(
+        topology.edges
+    ) > 0
+
+
+def test_unknown_edge_is_rejected():
+
+    topology = InferenceTopology()
+
+    topology.add_node(
+        Node(
+            id="A",
+            layer=0,
+            name="A",
+            type="test",
+        )
+    )
+
+    try:
+
+        topology.add_edge(
+            Edge(
+                source="A",
+                target="UNKNOWN",
+                relation="test",
+            )
+        )
+
+    except ValueError:
+
+        return
+
+    raise AssertionError(
+        "Unknown node should raise ValueError"
+    )
+
+
+def test_mock_inference():
+
+    backend = MockBackend()
+
+    result = backend.generate(
+        "hello"
+    )
+
+    assert result.response is not None
+
+    assert (
+        result.provider
+        == "local-mock"
+    )
+
+    assert (
+        result.latency_ms
+        is not None
+    )
+
+
+def test_state_validation():
+
+    backend = MockBackend()
+
+    state = TopologyState(
+        input=InputState(
+            text="hello"
+        )
+    )
+
+    state.inference = (
+        backend.generate(
+            "hello"
+        )
+    )
+
+    result = validate_state(
+        state
+    )
+
+    assert (
+        result.validation.valid
+        is True
+    )
+
+    assert (
+        result.output.text
+        is not None
+    )
+EOF
+
+# ------------------------------------------------------------
+# 12. DOCUMENTACIÓN TÉCNICA
+# ------------------------------------------------------------
+
+cat > docs/architecture.md <<'EOF'
+# LLM Inference Topology
+
+## Purpose
+
+This project models an LLM inference system
+as an operational topology.
+
+It does not claim to reproduce the internal
+Transformer computation.
+
+Instead, it provides a framework for
+representing:
+
+1. input;
+2. context;
+3. policy/control;
+4. model inference;
+5. compute substrate;
+6. output validation;
+7. application rendering.
+
+## Layer model
+
+L4  Application / Interface
+        |
+L3  Context / Orchestration
+        |
+L2  Policy / Control
+        |
+L1  Model Inference
+        |
+L0  Compute Substrate
+
+## Formal pipeline
+
+I(X) -> intent representation
+
+C(I) -> contextual state
+
+P(C) -> policy/control state
+
+M(P) -> model inference
+
+V(M) -> validation
+
+O(V) -> output
+
+Complete abstraction:
+
+O = V(M(P(C(I(X)))))
+
+This is a software-pipeline abstraction.
+It is not a literal representation of every
+internal Transformer operation.
+
+## Experimental objective
+
+Measure:
+
+- latency;
+- throughput;
+- token counts;
+- context size;
+- validation failures;
+- routing decisions;
+- cache behavior;
+- model/provider differences;
+- topology changes.
+
+## Scope boundary
+
+The project does not currently implement:
+
+- a Transformer;
+- GPU kernels;
+- a new inference engine;
+- RLHF;
+- model training.
+
+External inference systems can be used as
+backends for experiments.
+EOF
+
+# ------------------------------------------------------------
+# 13. README CORREGIDO
+# ------------------------------------------------------------
+
+cat > README.md <<'EOF'
+# LLM Inference Topology
+
+Framework experimental para representar
+y auditar topologías operacionales de
+sistemas LLM.
+
+## Estado
+
+v0.1.0 — prototipo ejecutable.
+
+El repositorio comenzó como un marco
+conceptual de cinco niveles y ahora
+contiene una implementación mínima
+reproducible.
+
+## Arquitectura
+
+L4 ─ Application / Interface
+ ↓
+L3 ─ Context / Orchestration
+ ↓
+L2 ─ Policy / Control
+ ↓
+L1 ─ Model Inference
+ ↓
+L0 ─ Compute Substrate
+
+## L0 — Compute Substrate
+
+Hardware, memoria, red y recursos de
+cómputo utilizados para ejecutar
+la inferencia.
+
+## L1 — Model Inference
+
+Ejecución del modelo:
+
+- Transformer;
+- attention;
+- decoding;
+- embeddings;
+- operaciones relacionadas.
+
+## L2 — Policy / Control
+
+Puede incluir:
+
+- instrucciones del sistema;
+- políticas de aplicación;
+- filtros;
+- clasificadores;
+- middleware;
+- mecanismos de seguridad;
+- restricciones derivadas del entrenamiento.
+
+Estos mecanismos no necesariamente
+pertenecen al mismo componente ni están
+presentes en todos los sistemas.
+
+## L3 — Context / Orchestration
+
+Puede incluir:
+
+- gestión del contexto;
+- sesiones;
+- memoria de ejecución;
+- routing;
+- scheduling;
+- coordinación del pipeline.
+
+## L4 — Application / Interface
+
+Aplicación que recibe la solicitud y
+presenta el resultado.
+
+## Gestión de contexto
+
+No se presupone FIFO como mecanismo
+universal.
+
+Puede incluir:
+
+- truncamiento;
+- eviction;
+- KV-cache;
+- prefix caching;
+- paged memory;
+- almacenamiento externo;
+- mecanismos específicos del runtime.
+
+## Pipeline
+
+INPUT
+  ↓
+INTENT
+  ↓
+CONTEXT
+  ↓
+CONTROL
+  ↓
+INFERENCE
+  ↓
+VALIDATION
+  ↓
+OUTPUT
+
+Formalmente:
+
+O = V(M(P(C(I(X)))))
+
+Donde:
+
+X = entrada
+
+I = representación de intención
+
+C = construcción/gestión del contexto
+
+P = política/control
+
+M = inferencia del modelo
+
+V = validación
+
+O = salida
+
+La expresión representa el pipeline
+de software y no pretende describir
+literalmente todas las operaciones
+internas de un Transformer.
+
+## Tres dimensiones de topología
+
+El concepto debe distinguir:
+
+COMPUTATIONAL TOPOLOGY
+    hardware / GPU / CPU / memoria / red
+
+INFERENCE TOPOLOGY
+    contexto / modelo / decoding / pipeline
+
+SYSTEM TOPOLOGY
+    servicios / API / routing / frontend
+
+La implementación inicial se centra
+en la topología operacional de inferencia.
+
+## Ejecutar
+
+python -m experiments.baseline
+
+## Runner
+
+python -m topology.parser \
+"Analiza esta arquitectura."
+
+## Mostrar topología
+
+python -m topology.parser --topology
+
+## Ollama
+
+ollama list
+
+python -m topology.parser \
+  --backend ollama \
+  --model llama3.2 \
+  "Explica la topología de inferencia."
+
+## Tests
+
+python -m pytest
+
+## Métricas
+
+La implementación inicial permite
+registrar:
+
+- latencia;
+- tokens de entrada;
+- tokens de salida;
+- throughput;
+- errores de validación.
+
+## Alcance
+
+Este proyecto no pretende actualmente
+ser:
+
+- un nuevo Transformer;
+- un motor GPU;
+- un sistema de entrenamiento;
+- un reemplazo de Ollama;
+- un reemplazo de llama.cpp;
+- un reemplazo de vLLM;
+- un reemplazo de SGLang.
+
+Es una capa experimental para
+representar, ejecutar y medir una
+topología de inferencia.
+EOF
+
+# ------------------------------------------------------------
+# 14. LICENSE
+# ------------------------------------------------------------
+
+cat > LICENSE <<'EOF'
+MIT License
+
+Copyright (c) 2026 DeconstructorGnostico
+
+Permission is hereby granted, free of charge,
+to any person obtaining a copy of this software
+and associated documentation files, to deal in
+the Software without restriction, including
+without limitation the rights to use, copy,
+modify, merge, publish, distribute, sublicense,
+and/or sell copies.
+EOF
+
+# ============================================================
+# 15. VERIFICACIÓN
+# ============================================================
+
+echo
+echo "=============================================="
+echo "ESTRUCTURA CREADA"
+echo "=============================================="
+
+find . -maxdepth 3 -type f \
+  ! -path './.git/*' \
+  | sort
+
+echo
+echo "=============================================="
+echo "TEST DE TOPOLOGÍA"
+echo "=============================================="
+
+python -m experiments.topology_test
+
+echo
+echo "=============================================="
+echo "TESTS PYTEST"
+echo "=============================================="
+
+python -m pytest
+
+echo
+echo "=============================================="
+echo "BASELINE"
+echo "=============================================="
+
+python -m experiments.baseline
+
+echo
+echo "=============================================="
+echo "RUNNER"
+echo "=============================================="
+
+python -m topology.parser \
+  "Describe la relación entre contexto, control e inferencia."
+
+echo
+echo "=============================================="
+echo "TOPOLOGÍA JSON"
+echo "=============================================="
+
+python -m topology.parser --topology
+
+# ============================================================
+# 16. OPCIONAL: OLLAMA
+# ============================================================
+
+if command -v ollama >/dev/null 2>&1; then
+
+    echo
+    echo "=============================================="
+    echo "OLLAMA DETECTADO"
+    echo "=============================================="
+
+    ollama list || true
+
+    echo
+    echo "Para probar inferencia real:"
+    echo
+    echo 'python -m topology.parser \'
+    echo '  --backend ollama \'
+    echo '  --model llama3.2 \'
+    echo '  "Analiza esta arquitectura."'
+
+else
+
+    echo
+    echo "Ollama no está instalado."
+    echo "El proyecto funciona igualmente con MockBackend."
+
+fi
+
+# ============================================================
+# 17. GIT
+# ============================================================
+
+echo
+echo "=============================================="
+echo "ESTADO GIT"
+echo "=============================================="
+
+git status
+
+echo
+echo "=============================================="
+echo "SIGUIENTE COMMIT"
+echo "=============================================="
+
+echo 'git add .'
+echo 'git commit -m "feat: convert inference topology into executable framework"'
+echo 'git push origin main'
+
+# ============================================================
+# 18. MODELO FINAL DE ARQUITECTURA
+# ============================================================
+
+cat <<'ARCH'
+
+==============================================================
+MODELO OPERACIONAL
+==============================================================
+
+                         INPUT
+                           |
+                           v
+                    +-------------+
+                    |   INTENT    |
+                    +-------------+
+                           |
+                           v
+                    +-------------+
+                    |   CONTEXT   |
+                    +-------------+
+                           |
+                           v
+                    +-------------+
+                    |   CONTROL   |
+                    +-------------+
+                           |
+                           v
+                    +-------------+
+                    |  INFERENCE  |
+                    +-------------+
+                           |
+                           v
+                    +-------------+
+                    | VALIDATION  |
+                    +-------------+
+                           |
+                           v
+                    +-------------+
+                    |   OUTPUT    |
+                    +-------------+
+
+
+FORMALIZACIÓN
+
+O = V(M(P(C(I(X)))))
+
+X = Input
+I = Intent
+C = Context
+P = Policy / Control
+M = Model Inference
+V = Validation
+O = Output
+
+
+TOPOLOGÍA DE SISTEMA
+
+L4  Application / Interface
+ ↓
+L3  Context / Orchestration
+ ↓
+L2  Policy / Control
+ ↓
+L1  Model Inference
+ ↓
+L0  Compute Substrate
+
+
+OBJETIVO DE LA v0.1
+
+Representar
+    ↓
+Ejecutar
+    ↓
+Validar
+    ↓
+Medir
+
+
+NO IMPLEMENTAR TODAVÍA
+
+- entrenamiento
+- RLHF
+- fine-tuning
+- CUDA propio
+- kernels propios
+- distributed inference
+- agentes autónomos
+- memoria vectorial
+- frontend complejo
+- infraestructura Firebase
+
+
+SIGUIENTE FASE
+
+v0.2
+
+             TOPOLOGY ENGINE
+                    |
+       +------------+------------+
+       |            |            |
+       v            v            v
+    ROUTER       CONTEXT      VALIDATOR
+       |            |            |
+       +------------+------------+
+                    |
+                    v
+             INFERENCE ENGINE
+                    |
+                    v
+              OBSERVABILITY
+                    |
+                    v
+                 METRICS
+
+==============================================================
+
+ARCH
