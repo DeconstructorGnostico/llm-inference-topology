@@ -1,0 +1,717 @@
+cd llm-inference-topology
+
+mkdir -p topology models experiments tests docs
+
+cat > pyproject.toml <<'EOF'
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-inference-topology"
+version = "0.1.0"
+description = "Framework experimental para representar y auditar topologías de inferencia LLM."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "DeconstructorGnostico"}
+]
+
+[project.scripts]
+llm-topology = "topology.parser:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+EOF
+
+
+cat > .gitignore <<'EOF'
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+dist/
+build/
+*.egg-info/
+results/
+EOF
+
+
+cat > topology/__init__.py <<'EOF'
+from .schema import (
+    InputState,
+    IntentState,
+    ContextState,
+    InferenceState,
+    ValidationState,
+    OutputState,
+    TopologyState,
+)
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "InputState",
+    "IntentState",
+    "ContextState",
+    "InferenceState",
+    "ValidationState",
+    "OutputState",
+    "TopologyState",
+]
+EOF
+
+
+cat > topology/schema.py <<'EOF'
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class InputState:
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class IntentState:
+    objective: str | None = None
+    constraints: list[str] = field(default_factory=list)
+    variables: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ContextState:
+    messages: list[dict[str, str]] = field(default_factory=list)
+    token_estimate: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class InferenceState:
+    model: str | None = None
+    provider: str | None = None
+    prompt: str | None = None
+    response: str | None = None
+    latency_ms: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+@dataclass
+class ValidationState:
+    valid: bool = False
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class OutputState:
+    text: str | None = None
+    format: str = "text"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TopologyState:
+    input: InputState
+    intent: IntentState = field(default_factory=IntentState)
+    context: ContextState = field(default_factory=ContextState)
+    inference: InferenceState = field(default_factory=InferenceState)
+    validation: ValidationState = field(default_factory=ValidationState)
+    output: OutputState = field(default_factory=OutputState)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "input": self.input.__dict__,
+            "intent": self.intent.__dict__,
+            "context": self.context.__dict__,
+            "inference": self.inference.__dict__,
+            "validation": self.validation.__dict__,
+            "output": self.output.__dict__,
+        }
+EOF
+
+
+cat > topology/graph.py <<'EOF'
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Node:
+    id: str
+    layer: int
+    name: str
+    type: str
+
+
+@dataclass
+class Edge:
+    source: str
+    target: str
+    relation: str
+
+
+@dataclass
+class InferenceTopology:
+    nodes: list[Node] = field(default_factory=list)
+    edges: list[Edge] = field(default_factory=list)
+
+    def add_node(self, node: Node) -> None:
+        if any(n.id == node.id for n in self.nodes):
+            raise ValueError(f"Node already exists: {node.id}")
+        self.nodes.append(node)
+
+    def add_edge(self, edge: Edge) -> None:
+        ids = {n.id for n in self.nodes}
+
+        if edge.source not in ids:
+            raise ValueError(f"Unknown source node: {edge.source}")
+
+        if edge.target not in ids:
+            raise ValueError(f"Unknown target node: {edge.target}")
+
+        self.edges.append(edge)
+
+    def validate(self) -> list[str]:
+        errors = []
+
+        ids = {n.id for n in self.nodes}
+
+        for edge in self.edges:
+            if edge.source not in ids:
+                errors.append(f"Unknown source: {edge.source}")
+            if edge.target not in ids:
+                errors.append(f"Unknown target: {edge.target}")
+
+        layers = {n.layer for n in self.nodes}
+
+        if not layers:
+            errors.append("Topology contains no nodes.")
+
+        if min(layers, default=0) < 0:
+            errors.append("Layer cannot be negative.")
+
+        return errors
+
+    def as_dict(self) -> dict:
+        return {
+            "nodes": [n.__dict__ for n in self.nodes],
+            "edges": [e.__dict__ for e in self.edges],
+        }
+
+
+def default_topology() -> InferenceTopology:
+    topology = InferenceTopology()
+
+    nodes = [
+        Node("L0", 0, "Compute substrate", "hardware"),
+        Node("L1", 1, "Model inference", "model"),
+        Node("L2", 2, "Policy and control", "control"),
+        Node("L3", 3, "Context orchestration", "orchestration"),
+        Node("L4", 4, "Application interface", "interface"),
+    ]
+
+    for node in nodes:
+        topology.add_node(node)
+
+    topology.add_edge(
+        Edge("L4", "L3", "request")
+    )
+
+    topology.add_edge(
+        Edge("L3", "L2", "context_to_control")
+    )
+
+    topology.add_edge(
+        Edge("L2", "L1", "controlled_inference")
+    )
+
+    topology.add_edge(
+        Edge("L1", "L0", "computation")
+    )
+
+    topology.add_edge(
+        Edge("L0", "L1", "execution_result")
+    )
+
+    topology.add_edge(
+        Edge("L1", "L2", "model_output")
+    )
+
+    topology.add_edge(
+        Edge("L2", "L3", "validated_output")
+    )
+
+    topology.add_edge(
+        Edge("L3", "L4", "render")
+    )
+
+    return topology
+EOF
+
+
+cat > topology/inference.py <<'EOF'
+import json
+import time
+import urllib.request
+import urllib.error
+
+from .schema import (
+    InputState,
+    InferenceState,
+)
+
+
+class InferenceBackend:
+    def generate(self, prompt: str) -> InferenceState:
+        raise NotImplementedError
+
+
+class MockBackend(InferenceBackend):
+    """
+    Deterministic backend for topology testing.
+    Does not call an external model.
+    """
+
+    def __init__(self, model: str = "mock"):
+        self.model = model
+
+    def generate(self, prompt: str) -> InferenceState:
+        start = time.perf_counter()
+
+        response = (
+            "[MOCK INFERENCE] "
+            f"Input received: {prompt}"
+        )
+
+        latency = (time.perf_counter() - start) * 1000
+
+        return InferenceState(
+            model=self.model,
+            provider="local-mock",
+            prompt=prompt,
+            response=response,
+            latency_ms=latency,
+            input_tokens=len(prompt.split()),
+            output_tokens=len(response.split()),
+        )
+
+
+class OllamaBackend(InferenceBackend):
+    """
+    Optional local backend compatible with Ollama's /api/generate endpoint.
+    """
+
+    def __init__(
+        self,
+        model: str = "llama3.2",
+        host: str = "http://127.0.0.1:11434",
+    ):
+        self.model = model
+        self.host = host.rstrip("/")
+
+    def generate(self, prompt: str) -> InferenceState:
+        payload = json.dumps({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+        }).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.host}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        start = time.perf_counter()
+
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"Ollama unavailable at {self.host}: {exc}"
+            ) from exc
+
+        latency = (time.perf_counter() - start) * 1000
+
+        text = data.get("response", "")
+
+        return InferenceState(
+            model=self.model,
+            provider="ollama",
+            prompt=prompt,
+            response=text,
+            latency_ms=latency,
+            input_tokens=data.get("prompt_eval_count"),
+            output_tokens=data.get("eval_count"),
+        )
+
+
+def run_inference(
+    text: str,
+    backend: InferenceBackend,
+) -> InferenceState:
+    return backend.generate(text)
+EOF
+
+
+cat > topology/validation.py <<'EOF'
+from .schema import TopologyState
+
+
+def validate_state(state: TopologyState) -> TopologyState:
+    errors = []
+    warnings = []
+
+    if not state.input.text.strip():
+        errors.append("Input text is empty.")
+
+    if state.inference.response is None:
+        errors.append("Inference response is missing.")
+
+    if state.inference.model is None:
+        warnings.append("No model identifier was recorded.")
+
+    state.validation.errors = errors
+    state.validation.warnings = warnings
+    state.validation.valid = len(errors) == 0
+
+    if state.inference.response is not None:
+        state.output.text = state.inference.response
+
+    return state
+EOF
+
+
+cat > topology/metrics.py <<'EOF'
+from statistics import mean
+from typing import Iterable
+
+
+def token_throughput(
+    output_tokens: int | None,
+    latency_ms: float | None,
+) -> float | None:
+    if output_tokens is None or latency_ms is None:
+        return None
+
+    if latency_ms <= 0:
+        return None
+
+    return output_tokens / (latency_ms / 1000)
+
+
+def latency_summary(latencies_ms: Iterable[float]) -> dict:
+    values = list(latencies_ms)
+
+    if not values:
+        return {
+            "count": 0,
+            "mean_ms": None,
+            "min_ms": None,
+            "max_ms": None,
+        }
+
+    return {
+        "count": len(values),
+        "mean_ms": mean(values),
+        "min_ms": min(values),
+        "max_ms": max(values),
+    }
+EOF
+
+
+cat > topology/parser.py <<'EOF'
+import argparse
+import json
+
+from .graph import default_topology
+from .inference import MockBackend, OllamaBackend
+from .schema import InputState, TopologyState
+from .validation import validate_state
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="LLM Inference Topology experimental runner"
+    )
+
+    parser.add_argument(
+        "text",
+        nargs="?",
+        default="Analiza esta arquitectura.",
+    )
+
+    parser.add_argument(
+        "--backend",
+        choices=["mock", "ollama"],
+        default="mock",
+    )
+
+    parser.add_argument(
+        "--model",
+        default="llama3.2",
+    )
+
+    parser.add_argument(
+        "--topology",
+        action="store_true",
+        help="Print the topology graph.",
+    )
+
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+
+    topology = default_topology()
+
+    if args.topology:
+        print(json.dumps(
+            topology.as_dict(),
+            indent=2,
+            ensure_ascii=False,
+        ))
+        return
+
+    if topology.validate():
+        raise RuntimeError("Topology validation failed.")
+
+    backend = (
+        OllamaBackend(model=args.model)
+        if args.backend == "ollama"
+        else MockBackend()
+    )
+
+    state = TopologyState(
+        input=InputState(text=args.text)
+    )
+
+    state.inference = backend.generate(args.text)
+
+    state = validate_state(state)
+
+    print(json.dumps(
+        state.to_dict(),
+        indent=2,
+        ensure_ascii=False,
+    ))
+
+
+if __name__ == "__main__":
+    main()
+EOF
+
+
+cat > models/__init__.py <<'EOF'
+from .base import ModelDescriptor
+
+__all__ = ["ModelDescriptor"]
+EOF
+
+
+cat > models/base.py <<'EOF'
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ModelDescriptor:
+    name: str
+    provider: str
+    architecture: str = "unknown"
+    parameters: int | None = None
+    context_length: int | None = None
+    quantization: str | None = None
+    metadata: dict = field(default_factory=dict)
+EOF
+
+
+cat > experiments/baseline.py <<'EOF'
+import json
+
+from topology.graph import default_topology
+from topology.inference import MockBackend
+from topology.schema import InputState, TopologyState
+from topology.validation import validate_state
+from topology.metrics import token_throughput
+
+
+def run() -> dict:
+    topology = default_topology()
+
+    topology_errors = topology.validate()
+
+    if topology_errors:
+        raise RuntimeError(topology_errors)
+
+    backend = MockBackend()
+
+    state = TopologyState(
+        input=InputState(
+            text="Describe the inference topology."
+        )
+    )
+
+    state.inference = backend.generate(
+        state.input.text
+    )
+
+    state = validate_state(state)
+
+    return {
+        "topology_valid": not topology_errors,
+        "state_valid": state.validation.valid,
+        "latency_ms": state.inference.latency_ms,
+        "throughput_tokens_s": token_throughput(
+            state.inference.output_tokens,
+            state.inference.latency_ms,
+        ),
+    }
+
+
+if __name__ == "__main__":
+    print(json.dumps(run(), indent=2))
+EOF
+
+
+cat > experiments/topology_test.py <<'EOF'
+from topology.graph import default_topology
+
+
+def main() -> None:
+    topology = default_topology()
+
+    errors = topology.validate()
+
+    print("NODES:", len(topology.nodes))
+    print("EDGES:", len(topology.edges))
+
+    if errors:
+        print("STATUS: FAIL")
+        for error in errors:
+            print("-", error)
+        raise SystemExit(1)
+
+    print("STATUS: PASS")
+
+
+if __name__ == "__main__":
+    main()
+EOF
+
+
+cat > tests/test_topology.py <<'EOF'
+from topology.graph import (
+    Edge,
+    InferenceTopology,
+    Node,
+    default_topology,
+)
+from topology.inference import MockBackend
+from topology.schema import InputState, TopologyState
+from topology.validation import validate_state
+
+
+def test_default_topology_is_valid():
+    topology = default_topology()
+
+    assert topology.validate() == []
+    assert len(topology.nodes) == 5
+    assert len(topology.edges) > 0
+
+
+def test_unknown_edge_is_rejected():
+    topology = InferenceTopology()
+
+    topology.add_node(
+        Node(
+            id="A",
+            layer=0,
+            name="A",
+            type="test",
+        )
+    )
+
+    try:
+        topology.add_edge(
+            Edge(
+                source="A",
+                target="UNKNOWN",
+                relation="test",
+            )
+        )
+    except ValueError:
+        return
+
+    raise AssertionError(
+        "Unknown node should raise ValueError"
+    )
+
+
+def test_mock_inference():
+    backend = MockBackend()
+
+    result = backend.generate("hello")
+
+    assert result.response is not None
+    assert result.provider == "local-mock"
+    assert result.latency_ms is not None
+
+
+def test_state_validation():
+    backend = MockBackend()
+
+    state = TopologyState(
+        input=InputState(text="hello")
+    )
+
+    state.inference = backend.generate("hello")
+
+    result = validate_state(state)
+
+    assert result.validation.valid is True
+    assert result.output.text is not None
+EOF
+
+
+cat > docs/architecture.md <<'EOF'
+# LLM Inference Topology
+
+## Purpose
+
+This project models an LLM inference system as an operational topology.
+
+It does not claim to reproduce the internal Transformer computation.
+
+Instead, it provides a framework for representing:
+
+1. input;
+2. context;
+3. policy/control;
+4. model inference;
+5. compute substrate;
+6. output validation;
+7. application rendering.
+
+## Layer model
+
+```text
+L4  Application / Interface
+        |
+L3  Context / Orchestration
+        |
+L2  Policy / Control
+        |
+L1  Model Inference
+        |
+L0  Compute Substrate
