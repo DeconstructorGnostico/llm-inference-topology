@@ -1,0 +1,28 @@
+llm-inference-topology/
+│
+├── README.md
+├── pyproject.toml
+│
+├── topology/
+│   ├── schema.py
+│   ├── parser.py
+│   ├── graph.py
+│   ├── inference.py
+│   ├── validation.py
+│   └── metrics.py
+│
+├── models/
+│   ├── base.py
+│   └── adapters/
+│
+├── experiments/
+│   ├── baseline.py
+│   ├── topology_test.py
+│   └── benchmark.py
+│
+├── data/
+│
+├── tests/
+│
+└── docs/
+    └── architecture.md
